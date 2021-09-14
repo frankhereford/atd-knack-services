@@ -9,10 +9,10 @@ import utils
 
 
 def handle_floating_timestamps(records, floating_timestamp_fields):
-    """ Socrata's fixed timestamp dataType does not allow tz info :(
-        (Alternatively, one could setup a transform in Socrata to convert the datatype
-        to a fixed timestamp:
-        https://dev.socrata.com/docs/transforms/to_fixed_timestamp.html)
+    """Socrata's fixed timestamp dataType does not allow tz info :(
+    (Alternatively, one could setup a transform in Socrata to convert the datatype
+    to a fixed timestamp:
+    https://dev.socrata.com/docs/transforms/to_fixed_timestamp.html)
     """
     for record in records:
         for field in floating_timestamp_fields:
@@ -24,7 +24,7 @@ def handle_floating_timestamps(records, floating_timestamp_fields):
 
 
 def format_keys(records):
-    """ This script assumes that the source knack records' field labels map exactly
+    """This script assumes that the source knack records' field labels map exactly
     to the socrata API column names, given that they are converted to lower case and
     spaces are replaced with underscores."""
     return [
@@ -33,10 +33,20 @@ def format_keys(records):
     ]
 
 
-def bools_to_strings(records):
+def bools_to_strings(records, metadata_socrata):
+    """
+    Supporting an unfortunate legacy antipattern in which socrata datasets were configured
+    to use the field type "text" to hold boolean values. This function converts bools in
+    knack data to text as needed.
+    """
+    bool_fieldnames = [
+        c["fieldName"]
+        for c in metadata_socrata["columns"]
+        if c["dataTypeName"] == "checkbox"
+    ]
     for record in records:
         for k, v in record.items():
-            if isinstance(v, bool):
+            if isinstance(v, bool) and k not in bool_fieldnames:
                 record[k] = str(v)
 
 
@@ -48,16 +58,20 @@ def handle_arrays(records):
                 record[k] = ", ".join([str(i) for i in v])
 
 
-def remove_unknown_fields(payload, client_metadata):
+def remove_unknown_fields(payload, metadata_socrata):
     """
     Modifies payload by removing the fields not found in Socrata
     Prevents "400 Client Error: Bad Request. Illegal field name sent" response
     :param payload: records payload to send to Socrata
-    :param client_metadata: Socrata metadata for app
+    :param metadata_socrata: Socrata metadata for app
     """
     payload_field_names = payload[0].keys()
-    column_names = [c["fieldName"] for c in client_metadata["columns"]]
-    unknown_fields = [field_name for field_name in payload_field_names if field_name not in column_names]
+    column_names = [c["fieldName"] for c in metadata_socrata["columns"]]
+    unknown_fields = [
+        field_name
+        for field_name in payload_field_names
+        if field_name not in column_names
+    ]
     if unknown_fields:
         logger.info(f"Record field names not in Socrata: {unknown_fields}")
         for record in payload:
@@ -110,7 +124,7 @@ def main():
 
     container = args.container
     config = CONFIG.get(args.app_name).get(container)
-    
+
     if not config:
         raise ValueError(
             f"No config entry found for app: {args.app_name}, container: {container}"
@@ -157,7 +171,7 @@ def main():
     payload = format_keys(payload)
     # remove unknown fields first to reduce extra processing when doing subsequent transforms
     remove_unknown_fields(payload, metadata_socrata)
-    bools_to_strings(payload)
+    bools_to_strings(payload, metadata_socrata)
     handle_arrays(payload)
     floating_timestamp_fields = utils.socrata.get_floating_timestamp_fields(
         resource_id, metadata_socrata
